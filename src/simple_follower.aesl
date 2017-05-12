@@ -1,0 +1,421 @@
+<!DOCTYPE aesl-source>
+<network>
+
+
+<!--list of global events-->
+<event size="0" name="robot_query"/>
+<event size="0" name="robot_response"/>
+
+
+<!--list of constants-->
+
+
+<!--show keywords state-->
+<keywords flag="true"/>
+
+
+<!--node thymio-II-->
+<node nodeId="61231" name="thymio-II">var rotational_speed = 100 ## Aspeed assigned when a robot has to rotate
+var normal_speed = 200 ## Maximum speed
+var turbo_speed = 75 ## Amount of speed assigned when the robot has to catch up to another robot
+var follow_state = 0 ## 1 is being follow, 2 is following someone
+var edge_counter = 0 ## edge counter, used to track how long the robot should turn when it is at an edge
+var rand_storage ## Variable used to store the random number of the math.rand(rand_storage) function
+var prox_pivot_value = 3000 ## Used to indicate the pivot value between being close or far from the robot
+var prox_close_value = 4200 ## Used to indicate that an object is so close that the robot should stop
+var detected_robot = 0 ## Variable used to send data to other robots via the emit command -> used to detect whether the robot sees another robot
+var reponse_iterator = 0 ## Variable used to determine how long a robot should wait for a reponse about another robot being close to you
+
+## Enable Proximity communication ##
+call prox.comm.enable(1)
+prox.comm.tx = 0
+prox.comm.rx = 0
+
+## Initialization ##
+motor.left.target = normal_speed
+motor.right.target = normal_speed
+callsub clear_lights
+
+## Onevent Functions ##
+onevent prox
+	## Object on the right side
+	if (prox.horizontal[4] > 0 and (prox.horizontal[3] == 0 or prox.horizontal[3] > 0) and
+	prox.horizontal[2] == 0 and prox.horizontal[1] == 0) then
+		callsub rightside
+	end
+	
+	# Object on the left side
+	if (prox.horizontal[4] == 0 and prox.horizontal[3] == 0 and (prox.horizontal[1] == 0 or prox.horizontal[1] > 0) and prox.horizontal[0] > 0) then
+		callsub leftside
+	end
+	
+	# Object is far infront of the robot
+	if (
+		((prox.horizontal[3] &lt;= prox_pivot_value and prox.horizontal[2] != 0)
+		 and (prox.horizontal[1] &lt;= prox_pivot_value and prox.horizontal[2] != 0 ))
+		 or (prox.horizontal[2] &lt;= prox_pivot_value and prox.horizontal[2] != 0)
+		) then
+		callsub farinfront
+	end
+	
+	# Object is close infront of robot
+	if (
+		((prox.horizontal[3] > prox_pivot_value and prox.horizontal[3] &lt; prox_close_value) 
+		and (prox.horizontal[1] > prox_pivot_value and prox.horizontal[1] &lt; prox_close_value))
+		or (prox.horizontal[2] > prox_pivot_value and prox.horizontal[2] &lt; prox_close_value)
+		) then
+		callsub closeinfront
+	end
+	
+	# Object has run into a another item
+	if (
+		prox.horizontal[3] > prox_close_value or prox.horizontal[1] > prox_close_value or prox.horizontal[2] > prox_close_value
+		) then
+		## If robot follow else avoid
+		callsub detect_robot
+	end
+	
+	# Object is behind the robot
+	if (prox.horizontal[5] > 0 or prox.horizontal[6] > 0) then
+		callsub behind
+	end
+	
+	# Object is behind and infront of another object
+	if  (prox.horizontal[5] > 0 or prox.horizontal[6] > 0) and ((prox.horizontal[3] > 0 and prox.horizontal[1] > 0) or prox.horizontal[2] > 0) then
+		callsub infront_behind
+	end
+	
+	# See nothing
+	if (prox.horizontal[6] == 0 and prox.horizontal[5] == 0 and prox.horizontal[4] == 0
+		and prox.horizontal[3] == 0 and prox.horizontal[2] == 0 and prox.horizontal[1] == 0
+		and prox.horizontal[0] == 0) then
+		callsub clear
+	end
+	
+	# Object is running of the edge
+	if ((prox.ground.reflected[0] &lt; 800) or (prox.ground.reflected[1] &lt; 800)) then
+		callsub backwards_n_turn
+	end
+	
+## Proximity sensor communication event	
+onevent prox.comm	
+	if prox.comm.rx == 1 then
+		call leds.circle(0,0,0,0,0,0,0,0)
+	end
+	
+	if prox.comm.rx == 2 then
+		call leds.circle(0,0,0,0,0,0,0,0)
+	end
+
+onevent robot_response
+	detected_robot = 1
+
+## Another robot sees me
+onevent robot_query
+	emit robot_response
+
+## Sub Methods ##
+## Rotate towards the left
+sub leftside
+	motor.left.target = (-normal_speed + (-rotational_speed))
+	motor.right.target = normal_speed + rotational_speed
+
+## Rotate towards the right
+sub rightside
+	motor.right.target = (-normal_speed + (-rotational_speed))
+	motor.left.target = normal_speed + rotational_speed
+	call leds.top(0,0,100)
+
+## Increase speed to catch up to a target
+sub farinfront
+	motor.left.target = (normal_speed + turbo_speed)
+	motor.right.target = (normal_speed + turbo_speed)
+	call leds.top(100,100,100)
+
+sub closeinfront
+	motor.left.target = normal_speed
+	motor.right.target = normal_speed
+	call leds.top(0,0,100)
+
+## Used to query whether a robot is near
+sub detect_robot
+	detected_robot = 0
+	emit robot_query
+	while reponse_iterator &lt; 1000 do
+		reponse_iterator = reponse_iterator + 1
+	end
+	if detected_robot == 0 then
+		callsub backwards_n_turn
+		call leds.bottom.left(0,0,0)
+		call leds.bottom.right(0,0,0)
+	else
+		callsub robot_collision
+		call leds.bottom.left(0,100,0)
+		call leds.bottom.right(0,100,0)
+	end
+	detected_robot = 0
+
+## run into robot wait for it to drive away
+sub robot_collision
+	motor.left.target = 0
+	motor.right.target = 0
+	call leds.bottom.left(0,100,0)
+	call leds.bottom.right(0,100,0)
+		
+sub behind
+	motor.left.target = normal_speed
+	motor.right.target = normal_speed
+	call leds.top(100,0,0)
+	
+sub infront_behind
+	call leds.top(0,100,0)
+
+## Drive backwards and then turn around to either right or left for a random amount of iterations (between 0 and 32767)
+## https://www.thymio.org/en:asebastdnative
+sub backwards_n_turn
+	callsub backwards
+	call math.rand(rand_storage)
+	edge_counter = 0
+	while edge_counter &lt; 25000 do
+		edge_counter = edge_counter + 1
+	end
+	call math.rand(rand_storage)
+	edge_counter = 0
+	if rand_storage > 0 then
+		callsub leftside
+	else
+		callsub rightside
+	end
+	while edge_counter &lt; abs(rand_storage) do
+		edge_counter = edge_counter + 1
+	end
+
+sub backwards
+	motor.left.target = -normal_speed
+	motor.right.target = -normal_speed
+	
+sub clear
+	motor.left.target = normal_speed
+	motor.right.target = normal_speed
+	call leds.top(0,0,0)
+	call leds.circle(100,100,100,100,100,100,100,100)
+
+sub clear_lights
+	call leds.bottom.left(0,0,0)
+	call leds.bottom.right(0,0,0)
+	call leds.buttons(0,0,0,0)
+	call leds.circle(0,0,0,0,0,0,0,0)
+	call leds.prox.h(0,0,0,0,0,0,0,0)
+	call leds.prox.v(0,0)
+	call leds.rc(0)
+	call leds.sound(0)
+	call leds.temperature(0,0)
+	call leds.top(0,0,0)
+
+
+</node>
+
+
+<!--node thymio-II-->
+<node nodeId="57904" name="thymio-II">var rotational_speed = 100 ## Aspeed assigned when a robot has to rotate
+var normal_speed = 200 ## Maximum speed
+var turbo_speed = 75 ## Amount of speed assigned when the robot has to catch up to another robot
+var follow_state = 0 ## 1 is being follow, 2 is following someone
+var edge_counter = 0 ## edge counter, used to track how long the robot should turn when it is at an edge
+var rand_storage ## Variable used to store the random number of the math.rand(rand_storage) function
+var prox_pivot_value = 3000 ## Used to indicate the pivot value between being close or far from the robot
+var prox_close_value = 4200 ## Used to indicate that an object is so close that the robot should stop
+var detected_robot = 0 ## Variable used to send data to other robots via the emit command -> used to detect whether the robot sees another robot
+var reponse_iterator = 0 ## Variable used to determine how long a robot should wait for a reponse about another robot being close to you
+
+## Enable Proximity communication ##
+call prox.comm.enable(1)
+prox.comm.tx = 0
+prox.comm.rx = 0
+
+## Initialization ##
+motor.left.target = normal_speed
+motor.right.target = normal_speed
+callsub clear_lights
+
+## Onevent Functions ##
+onevent prox
+	## Object on the right side
+	if (prox.horizontal[4] > 0 and (prox.horizontal[3] == 0 or prox.horizontal[3] > 0) and
+	prox.horizontal[2] == 0 and prox.horizontal[1] == 0) then
+		callsub rightside
+	end
+	
+	# Object on the left side
+	if (prox.horizontal[4] == 0 and prox.horizontal[3] == 0 and (prox.horizontal[1] == 0 or prox.horizontal[1] > 0) and prox.horizontal[0] > 0) then
+		callsub leftside
+	end
+	
+	# Object is far infront of the robot
+	if (
+		((prox.horizontal[3] &lt;= prox_pivot_value and prox.horizontal[2] != 0)
+		 and (prox.horizontal[1] &lt;= prox_pivot_value and prox.horizontal[2] != 0 ))
+		 or (prox.horizontal[2] &lt;= prox_pivot_value and prox.horizontal[2] != 0)
+		) then
+		callsub farinfront
+	end
+	
+	# Object is close infront of robot
+	if (
+		((prox.horizontal[3] > prox_pivot_value and prox.horizontal[3] &lt; prox_close_value) 
+		and (prox.horizontal[1] > prox_pivot_value and prox.horizontal[1] &lt; prox_close_value))
+		or (prox.horizontal[2] > prox_pivot_value and prox.horizontal[2] &lt; prox_close_value)
+		) then
+		callsub closeinfront
+	end
+	
+	# Object has run into a another item
+	if (
+		prox.horizontal[3] > prox_close_value or prox.horizontal[1] > prox_close_value or prox.horizontal[2] > prox_close_value
+		) then
+		## If robot follow else avoid
+		callsub detect_robot
+	end
+	
+	# Object is behind the robot
+	if (prox.horizontal[5] > 0 or prox.horizontal[6] > 0) then
+		callsub behind
+	end
+	
+	# Object is behind and infront of another object
+	if  (prox.horizontal[5] > 0 or prox.horizontal[6] > 0) and ((prox.horizontal[3] > 0 and prox.horizontal[1] > 0) or prox.horizontal[2] > 0) then
+		callsub infront_behind
+	end
+	
+	# See nothing
+	if (prox.horizontal[6] == 0 and prox.horizontal[5] == 0 and prox.horizontal[4] == 0
+		and prox.horizontal[3] == 0 and prox.horizontal[2] == 0 and prox.horizontal[1] == 0
+		and prox.horizontal[0] == 0) then
+		callsub clear
+	end
+	
+	# Object is running of the edge
+	if ((prox.ground.reflected[0] &lt; 800) or (prox.ground.reflected[1] &lt; 800)) then
+		callsub backwards_n_turn
+	end
+	
+## Proximity sensor communication event	
+onevent prox.comm	
+	if prox.comm.rx == 1 then
+		call leds.circle(0,0,0,0,0,0,0,0)
+	end
+	
+	if prox.comm.rx == 2 then
+		call leds.circle(0,0,0,0,0,0,0,0)
+	end
+
+onevent robot_response
+	detected_robot = 1
+
+## Another robot sees me
+onevent robot_query
+	emit robot_response
+
+## Sub Methods ##
+## Rotate towards the left
+sub leftside
+	motor.left.target = (-normal_speed + (-rotational_speed))
+	motor.right.target = normal_speed + rotational_speed
+
+## Rotate towards the right
+sub rightside
+	motor.right.target = (-normal_speed + (-rotational_speed))
+	motor.left.target = normal_speed + rotational_speed
+	call leds.top(0,0,100)
+
+## Increase speed to catch up to a target
+sub farinfront
+	motor.left.target = (normal_speed + turbo_speed)
+	motor.right.target = (normal_speed + turbo_speed)
+	call leds.top(100,100,100)
+
+sub closeinfront
+	motor.left.target = normal_speed
+	motor.right.target = normal_speed
+	call leds.top(0,0,100)
+
+## Used to query whether a robot is near
+sub detect_robot
+	detected_robot = 0
+	emit robot_query
+	while reponse_iterator &lt; 1000 do
+		reponse_iterator = reponse_iterator + 1
+	end
+	if detected_robot == 0 then
+		callsub backwards_n_turn
+		call leds.bottom.left(0,0,0)
+		call leds.bottom.right(0,0,0)
+	else
+		callsub robot_collision
+		call leds.bottom.left(0,100,0)
+		call leds.bottom.right(0,100,0)
+	end
+	detected_robot = 0
+
+## run into robot wait for it to drive away
+sub robot_collision
+	motor.left.target = 0
+	motor.right.target = 0
+	call leds.bottom.left(0,100,0)
+	call leds.bottom.right(0,100,0)
+		
+sub behind
+	motor.left.target = normal_speed
+	motor.right.target = normal_speed
+	call leds.top(100,0,0)
+	
+sub infront_behind
+	call leds.top(0,100,0)
+
+## Drive backwards and then turn around to either right or left for a random amount of iterations (between 0 and 32767)
+## https://www.thymio.org/en:asebastdnative
+sub backwards_n_turn
+	callsub backwards
+	call math.rand(rand_storage)
+	edge_counter = 0
+	while edge_counter &lt; 25000 do
+		edge_counter = edge_counter + 1
+	end
+	call math.rand(rand_storage)
+	edge_counter = 0
+	if rand_storage > 0 then
+		callsub leftside
+	else
+		callsub rightside
+	end
+	while edge_counter &lt; abs(rand_storage) do
+		edge_counter = edge_counter + 1
+	end
+
+sub backwards
+	motor.left.target = -normal_speed
+	motor.right.target = -normal_speed
+	
+sub clear
+	motor.left.target = normal_speed
+	motor.right.target = normal_speed
+	call leds.top(0,0,0)
+	call leds.circle(100,100,100,100,100,100,100,100)
+
+sub clear_lights
+	call leds.bottom.left(0,0,0)
+	call leds.bottom.right(0,0,0)
+	call leds.buttons(0,0,0,0)
+	call leds.circle(0,0,0,0,0,0,0,0)
+	call leds.prox.h(0,0,0,0,0,0,0,0)
+	call leds.prox.v(0,0)
+	call leds.rc(0)
+	call leds.sound(0)
+	call leds.temperature(0,0)
+	call leds.top(0,0,0)
+
+
+</node>
+
+
+</network>
