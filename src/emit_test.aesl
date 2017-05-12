@@ -1,0 +1,60 @@
+<!DOCTYPE aesl-source>
+<network>
+
+<!--list of global events-->
+<event size="0" name="robot_query"/>
+<event size="0" name="robot_response"/>
+
+<!--list of constants-->
+
+<!--show keywords state-->
+<keywords flag="true"/>
+
+<!--node thymio-II-->
+<node nodeId="57904" name="thymio-II">var response_iterator = 0
+	var data = 0
+	var test = 0
+	var prox_pivot_value = 3000 ## Used to indicate the pivot value between being close or far from the robot
+	var prox_close_value = 4200 ## Used to indicate that an object is so close that the robot should stop
+
+	onevent prox
+		if (
+			((prox.horizontal[3] > prox_pivot_value and prox.horizontal[3] &lt; prox_close_value) 
+			and (prox.horizontal[1] > prox_pivot_value and prox.horizontal[1] &lt; prox_close_value))
+			or (prox.horizontal[2] > prox_pivot_value and prox.horizontal[2] &lt; prox_close_value)
+			) then
+			callsub main
+		end
+		
+
+	sub main
+		call leds.top(100,0,0)
+		callsub robot_query
+		while response_iterator &lt; 10000 do
+			response_iterator = response_iterator + 1
+		end
+		response_iterator = 0 
+		
+		if data == 1 then
+			call leds.bottom.left(0,0,0)
+			call leds.bottom.right(0,0,0)
+		end
+		data = 0
+		call leds.top(0,0,0)
+
+
+	## Robot has received a reponse
+	onevent robot_response
+		data = 1
+		call leds.bottom.left(0,100,0)
+		call leds.bottom.right(0,100,0)
+
+	## Robot has received a query about being a robot -> respond
+	onevent robot_query
+		emit robot_response
+
+	sub robot_query
+		emit robot_query</node>
+</node>
+
+</network>
